@@ -20,15 +20,14 @@ pub fn solve_with_history(m: Matrix) -> MatrixSolver {
 
 #[macro_export]
 macro_rules! matrix {
-    ($([$($left:expr);+] | [$($right:expr);+]),+ $(,)?) => {{
-        $crate::matrix::Matrix::new(vec![
+    ($([$($left:expr);+] | [$($right:expr);+]),+ $(,)?) => {
+        $crate::matrix::Matrix::new_with_rows(vec![
             $(
                 Row::new(vec![$($left.into(),)+], vec![$($right.into(),)+]),
             )+
         ])
-    }};
+    };
 }
-
 fn main() {
 	println!(
 		"{}",
@@ -37,6 +36,6 @@ fn main() {
 			[0; 0; 2; 1] | [3],
 			[2; 2; 1; 0] | [1],
 			[0; 0; 1; 1] | [2],
-        ])
+		])
 	)
 }
