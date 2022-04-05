@@ -1,14 +1,85 @@
-use std::fmt::Display;
+use std::fmt::{Display, Debug};
 
 use crate::{fraction::Fraction, row::Row};
 
-#[derive(Debug, Clone)]
+fn recursive_determine_best(cols: Vec<usize>, rows: &[Row], max: usize) -> (Vec<usize>, usize) {
+	if cols.len() == max {
+		return (cols, 0);
+	}
+	let mut best = (0..max)
+		.into_iter()
+		.filter(|i| cols.iter().all(|c| c != i))
+		.map(|i| {
+			(
+				i,
+				rows.iter()
+					.filter(|r| cols.iter().all(|i| r.left()[*i] == Fraction::ZERO))
+					.filter(|r| r.left()[i] == Fraction::ZERO)
+					.count(),
+			)
+		})
+		.collect::<Vec<(usize, usize)>>();
+	best.sort_by(|a, b| a.1.cmp(&b.1).reverse());
+	best.iter()
+		.rev()
+		// using skip_while since it's sorted
+		.skip_while(|i| i.1 != best[0].1)
+		.map(|(i, v)| {
+			let mut new_cols = cols.clone();
+			new_cols.push(*i);
+			let (new_cols, nulls) = recursive_determine_best(new_cols, rows, max);
+			(new_cols, nulls + *v)
+		})
+		.max_by_key(|(_, i)| *i)
+		.unwrap()
+}
+
+#[derive(Clone)]
 pub struct Matrix {
 	rows: Vec<Row>,
 	state: MatrixState,
 	row_sequence: Vec<usize>,
+	col_sequence: Vec<usize>,
 }
 impl Matrix {
+	pub fn create<const N: usize, const M: usize>(
+		left: [[Fraction; N]; N],
+		right: [[Fraction; M]; N],
+	) -> Self {
+		let rows = left
+			.into_iter()
+			.zip(right.into_iter())
+			.map(|(l, r)| Row::new(l.to_vec(), r.to_vec()))
+			.collect::<Vec<Row>>();
+		let mut new = Self::new_with_rows(rows);
+		new.optimize_indeces();
+		new
+	}
+
+	pub fn optimize_indeces(&mut self) {
+		if let Some(max) = self.rows.iter().map(|r| r.left().len()).max() {
+			let cols = recursive_determine_best(Vec::new(), &self.rows, max).0;
+			let mut rows = self
+				.rows
+				.iter()
+				.map(|r| {
+					cols.iter()
+						.take_while(|i| {
+							r.left().get(**i).unwrap_or(&Fraction::positive_n(1)) == &Fraction::ZERO
+						})
+						.count()
+				})
+				.enumerate()
+				.collect::<Vec<(usize, usize)>>();
+			rows.sort_unstable_by_key(|(_, i)| *i);
+			self.col_sequence = cols;
+			self.row_sequence = rows.iter().map(|(i, _)| *i).collect::<Vec<usize>>();
+		} else {
+			self.col_sequence = Vec::new();
+			self.row_sequence = Vec::new();
+		}
+	}
+
 	pub fn new_with_rows(rows: Vec<Row>) -> Self {
 		rows.iter()
 			.enumerate()
@@ -20,8 +91,6 @@ impl Matrix {
 						i + 1,
 						rows.len()
 					)
-				} else {
-					()
 				}
 			});
 		let starting_state = if rows.len() == 1 {
@@ -34,12 +103,18 @@ impl Matrix {
 
 	pub fn new_with_state(rows: Vec<Row>, state: MatrixState) -> Self {
 		let row_sequence = (0..rows.len()).into_iter().collect::<Vec<usize>>();
-		Self::new(rows, state, row_sequence)
+		Self::new(rows, state, row_sequence.clone(), row_sequence)
 	}
 
-	pub fn new(rows: Vec<Row>, state: MatrixState, row_sequence: Vec<usize>) -> Self {
+	pub fn new(
+		rows: Vec<Row>,
+		state: MatrixState,
+		row_sequence: Vec<usize>,
+		col_sequence: Vec<usize>,
+	) -> Self {
 		Self {
 			state,
+			col_sequence,
 			row_sequence,
 			rows,
 		}
@@ -53,52 +128,55 @@ impl Matrix {
 		&self.state
 	}
 
-	fn null_row(&self, row: usize) -> Matrix {
-		let first_row = self.rows[self.row_sequence[row]].clone();
-		Matrix::new(
+	fn null_row(&self, index: usize) -> Option<Matrix> {
+		let relevant_cell = self.rows[self.row_sequence[index]][self.col_sequence[index] as isize];
+		if relevant_cell == Fraction::ZERO {
+			return None;
+		}
+		let mut r = Matrix::new(
 			self.rows
 				.iter()
 				.enumerate()
 				.map(|(i, r)| {
-					if self.row_sequence.iter().position(|n| n == &i).unwrap()
-						<= row
-					{
+					if self.row_sequence.iter().position(|n| n == &i).unwrap() <= index {
 						r.clone()
 					} else {
-						r.clone() * first_row[row as isize] - first_row.clone() * r[row as isize]
+						r.clone() * relevant_cell
+							- self.rows[self.row_sequence[index]].clone()
+								* r[self.col_sequence[index] as isize]
 					}
 				})
 				.collect::<Vec<Row>>(),
-			if row + 2 == self.row_sequence.len() {
-				MatrixState::NormalizeRow(row + 1)
+			if index + 2 == self.row_sequence.len() {
+				MatrixState::NormalizeRow(index + 1)
 			} else {
-				MatrixState::Null(row + 1)
+				MatrixState::Null(index + 1)
 			},
 			self.row_sequence.clone(),
-		)
+			self.col_sequence.clone(),
+		);
+		r.optimize_indeces();
+		r.update_state();
+		Some(r)
 	}
 
-	fn normalize_row(&self, row: usize) -> Option<Matrix> {
+	fn normalize_row(&self, index: usize) -> Option<Matrix> {
 		let mut new = self.clone();
-		let factor = new.rows[self.row_sequence[row]][row as isize];
-		new.rows[self.row_sequence[row]] /= factor;
-		new.state = if self.row_sequence[row] == 0 {
-			MatrixState::Done
-		} else {
-			MatrixState::ReInsert(row - 1)
-		};
+		let factor = new.rows[self.row_sequence[index]][self.col_sequence[index] as isize];
+		new.rows[self.row_sequence[index]] /= factor;
 		if new
 			.rows
 			.iter()
-			.any(|r| r.left().iter().all(|f| f.sign() == 0))
+			.any(|r| r.left().iter().all(|f| f == &Fraction::ZERO))
 		{
 			None
 		} else {
+			new.update_state();
 			Some(new)
 		}
 	}
 
-	fn reinsert_row(&self, row: usize) -> Matrix {
+	fn reinsert_row(&self, index: usize) -> Matrix {
 		// assuming that the rows n + 1..
 		// are zeroed with only one `1` at `n`
 		//
@@ -107,26 +185,88 @@ impl Matrix {
 		// 0 0 1 | 2
 		// with n = 0
 		let mut new = self.clone();
-		for i in row..self.rows.len() - 1 {
-			new.rows[self.row_sequence[row]] = new.rows[self.row_sequence[row]].clone() * new.rows[self.row_sequence[i + 1]][i as isize + 1] // should be 1 though
-                    		- new.rows[self.row_sequence[i + 1]].clone() * new.rows[self.row_sequence[row]][i as isize + 1];
+		for i in index..self.rows.len() - 1 {
+			new.rows[self.row_sequence[index]] = new.rows[self.row_sequence[index]].clone() * new.rows[self.row_sequence[i + 1]][self.col_sequence[i + 1] as isize] // should be 1 though
+				- new.rows[self.row_sequence[i + 1]].clone() * new.rows[self.row_sequence[index]][self.col_sequence[i + 1] as isize];
 		}
-		new.state = MatrixState::NormalizeRow(row);
+		new.update_state();
 		new
+	}
+
+	pub fn update_state(&mut self) {
+		match self.state {
+			MatrixState::Initial => {
+				self.state = MatrixState::Null(0);
+				self.update_state();
+			}
+			MatrixState::Null(_) => {
+				if let Some(n) = self
+					.row_sequence
+					.iter()
+					.enumerate()
+					.map(|(n, i)| (n, &self.rows[*i]))
+					.position(|(n, r)| {
+						self.col_sequence[..n]
+							.iter()
+							.any(|i| r.left()[*i] != Fraction::ZERO)
+					}) {
+					self.state = MatrixState::Null(n - 1);
+				} else {
+					self.state = MatrixState::NormalizeRow(self.rows.len() - 1);
+					self.update_state()
+				}
+			}
+			MatrixState::NormalizeRow(_) | MatrixState::ReInsertRow(_) => {
+				self.state = self
+					.row_sequence
+					.iter()
+					.enumerate()
+					.map(|(n, i)| (n, &self.rows[*i]))
+					.rev()
+					.find_map(|(n, r)| {
+						if self.col_sequence[n + 1..]
+							.iter()
+							.any(|i| r.left()[*i] != Fraction::ZERO)
+						{
+							Some(MatrixState::ReInsertRow(n))
+						} else if r.left()[self.col_sequence[n]] != Fraction::ONE {
+							Some(MatrixState::NormalizeRow(n))
+						} else {
+							None
+						}
+					})
+					.unwrap_or(MatrixState::Done);
+			}
+			MatrixState::Done => {}
+		}
 	}
 
 	pub fn calculate_next(&self) -> Option<Matrix> {
 		match self.state {
-			MatrixState::Null(s) => Some(self.null_row(s)),
+			MatrixState::Initial => panic!("Update state first!"),
+			MatrixState::Null(s) => self.null_row(s),
 			MatrixState::NormalizeRow(n) => self.normalize_row(n),
-			MatrixState::ReInsert(n) => Some(self.reinsert_row(n)),
+			MatrixState::ReInsertRow(n) => Some(self.reinsert_row(n)),
 			MatrixState::Done => None,
 		}
+	}
+
+	pub fn row_sequence(&self) -> &Vec<usize> {
+		&self.row_sequence
+	}
+
+	pub fn col_sequence(&self) -> &Vec<usize> {
+		&self.col_sequence
 	}
 }
 impl PartialEq for Matrix {
 	fn eq(&self, other: &Self) -> bool {
-		self.rows == other.rows && self.state == other.state
+		self.rows == other.rows
+	}
+}
+impl Debug for Matrix {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		writeln!(f, "\n{}", self)
 	}
 }
 impl Display for Matrix {
@@ -159,7 +299,7 @@ impl Display for Matrix {
 		)
 	}
 }
-fn pad_row(v: &Vec<Fraction>, l: usize, s: &str) -> String {
+fn pad_row(v: &[Fraction], l: usize, s: &str) -> String {
 	v.iter()
 		.map(|f| format!("{f:>l$}"))
 		.collect::<Vec<String>>()
@@ -168,149 +308,239 @@ fn pad_row(v: &Vec<Fraction>, l: usize, s: &str) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MatrixState {
+	Initial,
 	Null(usize),
 	NormalizeRow(usize),
-	ReInsert(usize),
+	ReInsertRow(usize),
 	Done,
 }
 impl Display for MatrixState {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		f.pad(&match self {
+			MatrixState::Initial => "Initial state".to_string(),
 			MatrixState::Null(n) => format!("Nulling first {} col(s)", n + 1),
 			MatrixState::NormalizeRow(n) => format!("Normalizing row {}", n + 1),
-			MatrixState::ReInsert(n) => format!("Using nulled rows to reinsert row {}", n + 1),
-			MatrixState::Done => format!("Done"),
+			MatrixState::ReInsertRow(n) => format!("Using nulled rows to reinsert row {}", n + 1),
+			MatrixState::Done => "Done".to_string(),
 		})
 	}
 }
 
+/// A macro to easily create matrices.
+/// The amount of columns on the left side must match the amount of rows.
+///
+/// # Example
+/// ```
+/// # use matrix_solver::matrix::Matrix;
+/// # use matrix_solver::row::Row;
+/// # use matrix_solver::fraction::Fraction;
+/// # use matrix_solver::matrix;
+/// let a = 99i32;
+/// assert_eq!(
+///     matrix![[1; a] | [(3, 4)], [2; 3] | [-1]],
+///     Matrix::new_with_rows(vec![
+///         Row::new(
+///             vec![Fraction::from(1i32), Fraction::from(a)],
+///             vec![Fraction::from((3i32, 4i32))]
+///         ),
+///         Row::new(
+///             vec![Fraction::from(2i32), Fraction::from(3i32)],
+///             vec![Fraction::from(-1i32)]
+///         ),
+///     ])
+/// );
+/// ```
+#[macro_export]
+macro_rules! matrix {
+    ($([$($left:expr);+] | [$($right:expr);+]),+ $(,)?) => {
+		$crate::matrix::Matrix::create([ $([$($left.into()),+]),+ ], [ $([$($right.into()),+]),+ ])
+    };
+}
+
 #[cfg(test)]
 mod test {
-	use crate::{fraction::Fraction, matrix::MatrixState, row::Row};
+	use crate::{matrix::MatrixState, solve, solve_with_history};
 
-	use super::Matrix;
+	#[cfg(test)]
+	mod optimize {
+		#[test]
+		fn leave_if_perfect() {
+			let mut cut = matrix![[1; 1] | [1], [0; 1] | [1]];
+			cut.optimize_indeces();
+			assert_eq!(cut.row_sequence, vec![0, 1]);
+			assert_eq!(cut.col_sequence, vec![0, 1]);
+		}
 
-	type F = Fraction;
+		#[test]
+		fn switch_cols() {
+			let mut cut = matrix![[1; 1] | [1], [1; 0] | [1]];
+			cut.optimize_indeces();
+			assert_eq!(cut.row_sequence, vec![0, 1]);
+			assert_eq!(cut.col_sequence, vec![1, 0]);
+		}
+
+		#[test]
+		fn switch_rows() {
+			let mut cut = matrix![[0; 1] | [1], [1; 1] | [1]];
+			cut.optimize_indeces();
+			assert_eq!(cut.row_sequence, vec![1, 0]);
+			assert_eq!(cut.col_sequence, vec![0, 1]);
+		}
+
+		#[test]
+		fn complex() {
+			let mut cut = matrix![
+				[0;0;1;1]|[1],
+				[1;0;1;0]|[1],
+				[1;1;0;1]|[1],
+				[1;0;0;0]|[1]
+			];
+			cut.optimize_indeces();
+			assert_eq!(cut.col_sequence, vec![1, 3, 2, 0]);
+			assert_eq!(cut.row_sequence, vec![2, 0, 1, 3]);
+
+			let mut cut = matrix![
+				[0;1;1;1]|[1],
+				[1;0;1;1]|[1],
+				[1;0;0;1]|[1],
+				[0;1;1;1]|[1]
+			];
+			cut.optimize_indeces();
+			assert_eq!(cut.col_sequence[..2], [1, 2]);
+		}
+	}
+
+	#[test]
+	fn create_matrix() {
+		let cut = matrix![
+			[1 ; 0 ; 1] | [1],
+			[0 ; 1 ; 1] | [1],
+			[1 ; 0 ; 0] | [1]
+		];
+		assert_eq!(cut.col_sequence, vec![1, 2, 0]);
+		assert_eq!(cut.row_sequence, vec![1, 0, 2]);
+
+		let cut = matrix![
+			[2; 1; 7; -2] | [5],
+			[0; 0; 2; 1] | [3],
+			[2; 2; 1; 0] | [1],
+			[0; 0; 1; 1] | [2],
+		];
+		assert_eq!(cut.col_sequence, vec![0, 1, 2, 3]);
+		assert_eq!(cut.row_sequence, vec![0, 2, 1, 3]);
+	}
 
 	#[test]
 	fn get_next_matrix() {
-		let step0 = Matrix::new(
-			vec![
-				Row::new(vec![1.into(), 1.into(), 2.into()], vec![8.into()]),
-				Row::new(vec![3.into(), 8.into(), 9.into()], vec![3.into()]),
-				Row::new(vec![4.into(), 2.into(), 3.into()], vec![1.into()]),
-			],
-			MatrixState::Null(0),
-			vec![0, 2, 1],
-		);
-		let step1 = step0.calculate_next().unwrap();
+		let initial = matrix![
+			[0 ; 1 ; 0 ; -1] | [ 1],
+			[1 ; 1 ; 4 ;  2] | [ 3],
+			[0 ; 2 ; 1 ;  1] | [ 5],
+			[1 ; 0 ; 1 ;  0] | [-1]
+		];
+		assert_eq!(initial.col_sequence, vec![0, 2, 1, 3]);
+		assert_eq!(initial.row_sequence, vec![1, 3, 2, 0]);
+		assert_eq!(initial.state, MatrixState::Null(0));
+
+		let step1 = initial.calculate_next().unwrap();
 		assert_eq!(
 			step1,
-			Matrix::new_with_state(
-				vec![
-					Row::new(vec![1.into(), 1.into(), 2.into()], vec![8.into()]),
-					Row::new(
-						vec![F::ZERO, 5.into(), 3.into()],
-						vec![F::negative_n(21)]
-					),
-					Row::new(vec![F::ZERO, (-2).into(), (-5).into()], vec![F::negative_n(31)]),
-				],
-				MatrixState::Null(1)
-			)
+			matrix![
+				[0 ;  1 ;  0 ; -1] | [ 1],
+				[1 ;  1 ;  4 ;  2] | [ 3],
+				[0 ;  2 ;  1 ;  1] | [ 5],
+				[0 ; -1 ; -3 ; -2] | [-4]
+			]
 		);
+		assert_eq!(step1.col_sequence, vec![0, 2, 1, 3]);
+		assert_eq!(step1.row_sequence, vec![1, 2, 3, 0]);
+		assert_eq!(step1.state, MatrixState::Null(1));
+
 		let step2 = step1.calculate_next().unwrap();
 		assert_eq!(
 			step2,
-			Matrix::new_with_state(
-				vec![
-					Row::new(vec![1.into(), 1.into(), 2.into()], vec![8.into()]),
-					Row::new(vec![F::ZERO, F::ZERO, 19.into()], vec![197.into()]),
-					Row::new(vec![F::ZERO, (-2).into(), (-5).into()], vec![F::negative_n(31)]),
-				],
-				MatrixState::NormalizeRow(2)
-			)
+			matrix![
+				[0 ; 1 ; 0 ; -1] | [ 1],
+				[1 ; 1 ; 4 ;  2] | [ 3],
+				[0 ; 2 ; 1 ;  1] | [ 5],
+				[0 ; 5 ; 0 ;  1] | [11]
+			]
 		);
+		assert_eq!(step2.col_sequence, vec![0, 2, 1, 3]);
+		assert_eq!(step2.row_sequence, vec![1, 2, 0, 3]);
+		assert_eq!(step2.state, MatrixState::Null(2));
+
 		let step3 = step2.calculate_next().unwrap();
 		assert_eq!(
 			step3,
-			Matrix::new_with_state(
-				vec![
-					Row::new(vec![1.into(), 1.into(), 2.into()], vec![8.into()]),
-					Row::new(
-						vec![F::ZERO, F::ZERO, 1.into()],
-						vec![F::positive_n(197) / 19.into()]
-					),
-					Row::new(
-						vec![F::ZERO, F::negative_n(2), F::negative_n(5)],
-						vec![F::negative_n(31)]
-					),
-				],
-				MatrixState::ReInsert(1)
-			)
+			matrix![
+				[0 ; 1 ; 0 ; -1] | [1],
+				[1 ; 1 ; 4 ;  2] | [3],
+				[0 ; 2 ; 1 ;  1] | [5],
+				[0 ; 0 ; 0 ;  6] | [6]
+			]
 		);
+		assert_eq!(step3.col_sequence, vec![0, 2, 1, 3]);
+		assert_eq!(step3.row_sequence, vec![1, 2, 0, 3]);
+		assert_eq!(step3.state, MatrixState::NormalizeRow(3));
+
 		let step4 = step3.calculate_next().unwrap();
 		assert_eq!(
 			step4,
-			Matrix::new_with_state(
-				vec![
-					Row::new(vec![1.into(), 1.into(), 2.into()], vec![8.into()]),
-					Row::new(
-						vec![F::ZERO, F::ZERO, 1.into()],
-						vec![F::positive_n(197) / 19.into()]
-					),
-					Row::new(
-						vec![F::ZERO, F::negative_n(2), F::ZERO],
-						vec![F::negative_n(31) + F::positive_n(985) / 19.into()]
-					),
-				],
-				MatrixState::NormalizeRow(1)
-			)
+			matrix![
+				[0 ; 1 ; 0 ; -1] | [1],
+				[1 ; 1 ; 4 ;  2] | [3],
+				[0 ; 2 ; 1 ;  1] | [5],
+				[0 ; 0 ; 0 ;  1] | [1]
+			]
 		);
+		assert_eq!(step4.col_sequence, vec![0, 2, 1, 3]);
+		assert_eq!(step4.row_sequence, vec![1, 2, 0, 3]);
+		assert_eq!(step4.state, MatrixState::ReInsertRow(2));
+
 		let step5 = step4.calculate_next().unwrap();
 		assert_eq!(
 			step5,
-			Matrix::new_with_state(
-				vec![
-					Row::new(vec![1.into(), 1.into(), 2.into()], vec![8.into()]),
-					Row::new(
-						vec![F::ZERO, F::ZERO, 1.into()],
-						vec![F::positive_n(197) / 19.into()]
-					),
-					Row::new(
-						vec![F::ZERO, 1.into(), F::ZERO],
-						vec![
-							(F::negative_n(31) + F::positive_n(985) / 19.into()) / F::negative_n(2)
-						]
-					),
-				],
-				MatrixState::ReInsert(0)
-			)
+			matrix![
+				[0 ; 1 ; 0 ; 0] | [2],
+				[1 ; 1 ; 4 ; 2] | [3],
+				[0 ; 2 ; 1 ; 1] | [5],
+				[0 ; 0 ; 0 ; 1] | [1]
+			]
 		);
+		assert_eq!(step5.col_sequence, vec![0, 2, 1, 3]);
+		assert_eq!(step5.row_sequence, vec![1, 2, 0, 3]);
+		assert_eq!(step5.state, MatrixState::ReInsertRow(1));
+
+		let step6 = step5.calculate_next().unwrap();
 		assert_eq!(
-			step5.calculate_next().unwrap().calculate_next().unwrap(),
-			Matrix::new_with_state(
-				vec![
-					Row::new(
-						vec![1.into(), F::ZERO, F::ZERO],
-						vec![
-							F::positive_n(8)
-								- (F::negative_n(31) + F::positive_n(985) / 19.into())
-									/ F::negative_n(2) - F::positive_n(197) / 19.into() * 2.into()
-						]
-					),
-					Row::new(
-						vec![F::ZERO, F::ZERO, 1.into()],
-						vec![F::positive_n(197) / 19.into()]
-					),
-					Row::new(
-						vec![F::ZERO, 1.into(), F::ZERO],
-						vec![
-							(F::negative_n(31) + F::positive_n(985) / 19.into()) / F::negative_n(2)
-						]
-					),
-				],
-				MatrixState::Done
-			)
+			step6,
+			matrix![
+				[0 ; 1 ; 0 ; 0] | [2],
+				[1 ; 1 ; 4 ; 2] | [3],
+				[0 ; 0 ; 1 ; 0] | [0],
+				[0 ; 0 ; 0 ; 1] | [1]
+			]
 		);
+		assert_eq!(step6.col_sequence, vec![0, 2, 1, 3]);
+		assert_eq!(step6.row_sequence, vec![1, 2, 0, 3]);
+		assert_eq!(step6.state, MatrixState::ReInsertRow(0));
+
+		let step7 = step6.calculate_next().unwrap();
+		assert_eq!(
+			step7,
+			matrix![
+				[0 ; 1 ; 0 ; 0] | [ 2],
+				[1 ; 0 ; 0 ; 0] | [-1],
+				[0 ; 0 ; 1 ; 0] | [ 0],
+				[0 ; 0 ; 0 ; 1] | [ 1]
+			]
+		);
+		assert_eq!(step7.col_sequence, vec![0, 2, 1, 3]);
+		assert_eq!(step7.row_sequence, vec![1, 2, 0, 3]);
+		assert_eq!(step7.state, MatrixState::Done);
+
+		assert_eq!(solve(initial.clone()), step7);
+		assert_eq!(solve_with_history(initial).get(-1), step7);
 	}
 }

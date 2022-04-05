@@ -20,13 +20,27 @@ pub struct Fraction {
 	denominator: usize,
 }
 impl Fraction {
-	pub const ZERO: Fraction = Self::positive_n(0);
+	pub const M_ONE: Self = Self {
+		denominator: 1,
+		negative: true,
+		numerator: 1,
+	};
+	pub const ZERO: Self = Self {
+		denominator: 1,
+		negative: false,
+		numerator: 0,
+	};
+	pub const ONE: Self = Self {
+		denominator: 1,
+		negative: false,
+		numerator: 1,
+	};
 
 	pub const fn new(negative: bool, numerator: usize, denominator: usize) -> Self {
 		let gcd = gcd(numerator, denominator);
 		Self {
 			denominator: denominator / gcd,
-			negative: negative && numerator > 0,
+			negative: negative ^ (numerator > 0) ^ (denominator > 0),
 			numerator: numerator / gcd,
 		}
 	}
@@ -64,7 +78,7 @@ impl Fraction {
 	}
 
 	pub fn swapped(&self) -> Self {
-		let mut new = self.clone();
+		let mut new = *self;
 		new.swap();
 		new
 	}
@@ -88,13 +102,18 @@ impl Fraction {
 		self.sign() as f64 * self.numerator as f64 / self.denominator as f64
 	}
 
-    pub fn abs(&self) -> Self {
-        Self::positive(self.numerator, self.denominator)
-    }
+	pub fn abs(&self) -> Self {
+		Self::positive(self.numerator, self.denominator)
+	}
 
-    pub fn is_negative(&self) -> bool {
-        self.negative
-    }
+	pub fn is_negative(&self) -> bool {
+		self.negative
+	}
+}
+impl<N: Into<Fraction>, D: Into<Fraction>> From<(N, D)> for Fraction {
+	fn from(f: (N, D)) -> Self {
+		f.0.into() / f.1.into()
+	}
 }
 impl From<isize> for Fraction {
 	fn from(n: isize) -> Self {
@@ -102,15 +121,60 @@ impl From<isize> for Fraction {
 			Some(Ordering::Greater) => Self::positive_n(n as usize),
 			Some(Ordering::Equal) => Self::ZERO,
 			Some(Ordering::Less) => Self::negative_n(n.abs() as usize),
-			None => todo!(),
+			None => Self::ZERO,
 		}
+	}
+}
+impl From<i64> for Fraction {
+	fn from(n: i64) -> Self {
+		Self::from(n as isize)
+	}
+}
+impl From<i32> for Fraction {
+	fn from(n: i32) -> Self {
+		Self::from(n as isize)
+	}
+}
+impl From<i16> for Fraction {
+	fn from(n: i16) -> Self {
+		Self::from(n as isize)
+	}
+}
+impl From<i8> for Fraction {
+	fn from(n: i8) -> Self {
+		Self::from(n as isize)
+	}
+}
+impl From<usize> for Fraction {
+	fn from(n: usize) -> Self {
+		Self::positive_n(n)
+	}
+}
+impl From<u64> for Fraction {
+	fn from(n: u64) -> Self {
+		Self::from(n as usize)
+	}
+}
+impl From<u32> for Fraction {
+	fn from(n: u32) -> Self {
+		Self::from(n as usize)
+	}
+}
+impl From<u16> for Fraction {
+	fn from(n: u16) -> Self {
+		Self::from(n as usize)
+	}
+}
+impl From<u8> for Fraction {
+	fn from(n: u8) -> Self {
+		Self::from(n as usize)
 	}
 }
 impl Add<Fraction> for Fraction {
 	type Output = Fraction;
 
 	fn add(self, rhs: Fraction) -> Self::Output {
-		let mut new = self.clone();
+		let mut new = self;
 		new += rhs;
 		new
 	}
@@ -141,7 +205,7 @@ impl Mul<Fraction> for Fraction {
 	type Output = Fraction;
 
 	fn mul(self, rhs: Fraction) -> Self::Output {
-		let mut new = self.clone();
+		let mut new = self;
 		new *= rhs;
 		new
 	}
@@ -157,11 +221,13 @@ impl MulAssign<Fraction> for Fraction {
 impl Div<Fraction> for Fraction {
 	type Output = Fraction;
 
+	#[allow(clippy::suspicious_arithmetic_impl)]
 	fn div(self, rhs: Fraction) -> Self::Output {
 		self * rhs.swapped()
 	}
 }
 impl DivAssign<Fraction> for Fraction {
+	#[allow(clippy::suspicious_op_assign_impl)]
 	fn div_assign(&mut self, rhs: Fraction) {
 		*self *= rhs.swapped();
 	}
@@ -214,6 +280,11 @@ impl Debug for Fraction {
 #[cfg(test)]
 mod test {
 	use crate::fraction::Fraction;
+
+	#[test]
+	fn from_nom_denom_pair() {
+		assert_eq!(Fraction::from((6, 8)), Fraction::positive(3, 4));
+	}
 
 	#[test]
 	fn truncate() {

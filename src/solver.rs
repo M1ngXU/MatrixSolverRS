@@ -47,9 +47,10 @@ impl Display for MatrixSolver {
 		let last = &self[-1];
 		if last.state() == &MatrixState::Done {
 			let result = last
-				.rows()
+				.row_sequence()
 				.iter()
-				.map(|r| {
+				.map(|i| {
+					let r = &last.rows()[*i];
 					r.right()
 						.iter()
 						.enumerate()
@@ -60,7 +61,7 @@ impl Display for MatrixSolver {
 									String::new()
 								} else if i > 0 && f.as_f64().abs() == 1.0 {
 									String::from(
-										('t' as u8 + (i % u8::MAX as usize) as u8 - 1) as char,
+										(b't' + (i % u8::MAX as usize) as u8 - 1) as char,
 									)
 								} else if i == 0 {
 									f.to_string()
@@ -68,7 +69,7 @@ impl Display for MatrixSolver {
 									format!(
 										"{}{}",
 										f.abs(),
-										('t' as u8 + (i % u8::MAX as usize) as u8 - 1) as char
+										(b't' + (i % u8::MAX as usize) as u8 - 1) as char
 									)
 								},
 							)
@@ -83,12 +84,12 @@ impl Display for MatrixSolver {
 				writeln!(
 					f,
 					"x_{:0>width$} = {}",
-					i + 1,
+					last.col_sequence()[i] + 1,
 					r.iter()
 						.enumerate()
 						.map(|(i, s)| if i == 0 {
 							format!("{:>width$}", s.1, width = max[i])
-						} else if s.1.len() == 0 {
+						} else if s.1.is_empty() {
 							" ".repeat(max[i] + 3)
 						} else {
 							format!(
@@ -104,7 +105,7 @@ impl Display for MatrixSolver {
 				)?;
 			}
 		} else {
-            writeln!(f, "Failed to solve matrix.")?;
+			writeln!(f, "Failed to solve matrix.")?;
 		}
 		Ok(())
 	}

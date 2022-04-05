@@ -27,6 +27,7 @@ impl MulAssign<Fraction> for Row {
 	}
 }
 impl DivAssign<Fraction> for Row {
+	#[allow(clippy::suspicious_op_assign_impl)]
 	fn div_assign(&mut self, rhs: Fraction) {
 		*self *= rhs.swapped();
 	}
@@ -35,7 +36,7 @@ impl Mul<Fraction> for Row {
 	type Output = Row;
 
 	fn mul(self, rhs: Fraction) -> Self::Output {
-		let mut new = self.clone();
+		let mut new = self;
 		new *= rhs;
 		new
 	}
@@ -44,7 +45,7 @@ impl Sub<Row> for Row {
 	type Output = Row;
 
 	fn sub(self, rhs: Row) -> Self::Output {
-		let mut new = self.clone();
+		let mut new = self;
 		new.left
 			.iter_mut()
 			.enumerate()
