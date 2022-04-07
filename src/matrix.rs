@@ -1,4 +1,4 @@
-use std::fmt::{Display, Debug};
+use std::fmt::{Debug, Display};
 
 use crate::{fraction::Fraction, row::Row};
 
@@ -46,11 +46,15 @@ impl Matrix {
 		left: [[Fraction; N]; N],
 		right: [[Fraction; M]; N],
 	) -> Self {
-		let rows = left
-			.into_iter()
-			.zip(right.into_iter())
-			.map(|(l, r)| Row::new(l.to_vec(), r.to_vec()))
-			.collect::<Vec<Row>>();
+		Self::create_with_rows(
+			left.into_iter()
+				.zip(right.into_iter())
+				.map(|(l, r)| Row::new(l.to_vec(), r.to_vec()))
+				.collect::<Vec<Row>>(),
+		)
+	}
+
+	pub fn create_with_rows(rows: Vec<Row>) -> Self {
 		let mut new = Self::new_with_rows(rows);
 		new.optimize_indeces();
 		new
